@@ -24,7 +24,7 @@ The plugin does **not** install or manage the binary: it only runs the one it fi
 
 | System | OpenBao (`bao`) |
 |---|---|
-| macOS | `brew install openbao` |
+| macOS, Linux (Homebrew) | `brew install openbao` |
 | Arch | `sudo pacman -Sy openbao` |
 | Fedora / RHEL | `sudo dnf install -y epel-release openbao` (EPEL on RHEL) |
 | Debian / Ubuntu | `.deb` from the [downloads page](https://openbao.org/downloads/) |
