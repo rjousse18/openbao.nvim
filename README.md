@@ -1,16 +1,19 @@
 # openbao.nvim
 
-Browse, edit and sync [OpenBao](https://openbao.org) (and HashiCorp Vault) secrets without leaving Neovim.
+🔐 **OpenBao (and HashiCorp Vault) right inside Neovim.** No more juggling between the web UI and the terminal.
+
 It drives the `bao` / `vault` CLI, so login, TLS and namespaces behave exactly like in your terminal.
+No extra dependency.
 
 > Not affiliated with the OpenBao project or the Linux Foundation.
 
-- **Edit** a secret like a file: `:Bao edit secret/app/db`, change it, `:w` sends it to OpenBao.
-- **Browse and search** mounts, folders and every secret path with your picker (snacks, telescope, fzf-lua).
-- **Log in from Neovim**: `:Bao login`, and an automatic prompt when a call fails because the token expired.
-- **Sync environment variables** of a project from OpenBao into `vim.env` and/or a `.env` file, and push changes back.
-- **History**: view, roll back or undelete KV v2 versions.
-- **Safe by default**: values hidden, no swap/undo files, check-and-set so you never overwrite a remote change silently.
+- **Browse, search and edit** secrets like plain files: `:Bao edit secret/app/db`, change it, `:w` sends it to OpenBao.
+  Picker support (snacks, telescope, fzf-lua), history and rollback of KV v2 versions.
+- **Wire up your projects**: one `.env` per environment (uat, dev...) injected into Neovim in one command.
+  Handy to start a Spring Boot app with the right variables, and you keep the choice of which ones to use.
+- **Log in from Neovim**: `:Bao login`, and an automatic prompt when the token expires.
+- **Safe by default**: values hidden, no secret in logs or command arguments, no swap/undo files,
+  check-and-set so you never overwrite a remote change silently, and a project config you can commit.
 
 ## Requirements
 
