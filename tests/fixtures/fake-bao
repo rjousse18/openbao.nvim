@@ -1,0 +1,172 @@
+#!/usr/bin/env -S nvim -l
+-- Fake `bao` CLI for the test suite: an in-memory-on-disk KV v2 store, run with `nvim -l`.
+-- State lives in $FAKE_BAO_DIR/store.json (see tests/helpers.lua), calls are logged in calls.log.
+-- Supports only what openbao.nvim calls: version, token lookup, login, secrets list, kv get/put/list/
+-- delete/undelete/rollback and kv metadata get.
+
+local dir = assert(os.getenv("FAKE_BAO_DIR"), "FAKE_BAO_DIR is not set")
+local store_path = dir .. "/store.json"
+
+local function read_store()
+  local f = assert(io.open(store_path, "r"))
+  local s = vim.json.decode(f:read("*a"))
+  f:close()
+  return s
+end
+
+local function write_store(s)
+  local f = assert(io.open(store_path, "w"))
+  f:write(vim.json.encode(s))
+  f:close()
+end
+
+local function fail(code, msg)
+  io.stderr:write(msg .. "\n")
+  os.exit(code)
+end
+
+local function out(v)
+  io.stdout:write(vim.json.encode(v) .. "\n")
+  os.exit(0)
+end
+
+local log = io.open(dir .. "/calls.log", "a")
+log:write(table.concat(arg, " ") .. "\n")
+log:close()
+
+local flags, pos = {}, {}
+for _, a in ipairs(arg) do
+  local k, v = a:match("^%-([%w%-]+)=(.*)$")
+  if k then
+    flags[k] = v
+  elseif a:match("^%-[%w%-]+$") and a ~= "-" then
+    flags[a:sub(2)] = true
+  else
+    pos[#pos + 1] = a
+  end
+end
+
+local store = read_store()
+local cmd, sub = pos[1], pos[2]
+local denied = "Error making API request.\n\nCode: 403. Errors:\n\n* permission denied"
+
+if cmd == "version" then
+  io.stdout:write("OpenBao v0.0.0-fake\n")
+  os.exit(0)
+end
+
+if cmd == "login" then
+  store.token_valid = true
+  store.logins = (store.logins or 0) + 1
+  write_store(store)
+  io.stderr:write("Complete the login via your OIDC provider. Launching browser to: https://idp.test/auth\n")
+  os.exit(store.login_fails and 1 or 0)
+end
+
+if not store.token_valid then
+  fail(2, denied)
+end
+
+if cmd == "token" then
+  out({ data = { display_name = "oidc-tester", policies = { "default", "dev" }, ttl = 3600 } })
+end
+
+if cmd == "secrets" then
+  local res = {}
+  for _, m in ipairs(store.mounts) do
+    res[m .. "/"] = { type = "kv", options = { version = "2" } }
+  end
+  res["sys/"] = { type = "system" }
+  out(res)
+end
+
+if cmd ~= "kv" then
+  fail(1, "fake-bao: unsupported command " .. tostring(cmd))
+end
+
+local mount = assert(flags.mount, "missing -mount")
+local verb = sub == "metadata" and "metadata get" or sub
+local rest = sub == "metadata" and { unpack(pos, 4) } or { unpack(pos, 3) }
+local rel = rest[1] ~= "-" and rest[1] or nil
+local full = rel and (mount .. "/" .. rel) or mount
+if full:find("forbidden", 1, true) then
+  fail(2, denied)
+end
+local versions = store.secrets[full]
+
+local function current()
+  return versions and #versions or 0
+end
+
+local function now()
+  return os.date("!%Y-%m-%dT%H:%M:%S.000000Z")
+end
+
+if verb == "get" then
+  local n = tonumber(flags.version) or current()
+  local v = versions and versions[n]
+  if not v or v.deleted or v.destroyed then
+    fail(2, "No value found at " .. mount .. "/data/" .. rel)
+  end
+  out({ data = { data = v.data, metadata = { version = n } } })
+elseif verb == "put" then
+  local body = vim.json.decode(io.stdin:read("*a"))
+  if flags.cas and tonumber(flags.cas) ~= current() then
+    fail(2, "Error writing data to " .. mount .. "/data/" .. rel .. ": check-and-set parameter did not match the current version")
+  end
+  versions = versions or {}
+  versions[#versions + 1] = { data = body, created = now(), deleted = false, destroyed = false }
+  store.secrets[full] = versions
+  write_store(store)
+  out({ data = { version = #versions } })
+elseif verb == "list" then
+  local prefix = full .. "/"
+  local seen, entries = {}, {}
+  for path in pairs(store.secrets) do
+    if path:sub(1, #prefix) == prefix then
+      local tail = path:sub(#prefix + 1)
+      local head, more = tail:match("^([^/]+)(/?)")
+      local entry = head .. more
+      if not seen[entry] then
+        seen[entry] = true
+        entries[#entries + 1] = entry
+      end
+    end
+  end
+  if #entries == 0 then
+    fail(2, "No value found at " .. mount .. "/metadata/" .. (rel or ""))
+  end
+  table.sort(entries)
+  out(entries)
+elseif verb == "metadata get" then
+  if not versions then
+    fail(2, "No value found at " .. mount .. "/metadata/" .. rel)
+  end
+  local vs = {}
+  for i, v in ipairs(versions) do
+    vs[tostring(i)] = { created_time = v.created, deletion_time = v.deleted and now() or "", destroyed = v.destroyed }
+  end
+  out({ data = { current_version = #versions, versions = vs } })
+elseif verb == "rollback" then
+  local v = versions and versions[tonumber(flags.version)]
+  if not v then
+    fail(2, "version not found")
+  end
+  versions[#versions + 1] = { data = v.data, created = now(), deleted = false, destroyed = false }
+  write_store(store)
+  out({ data = { version = #versions } })
+elseif verb == "delete" then
+  if not versions then
+    fail(2, "No value found at " .. mount .. "/data/" .. rel)
+  end
+  versions[#versions].deleted = true
+  write_store(store)
+  os.exit(0)
+elseif verb == "undelete" then
+  for n in tostring(flags.versions):gmatch("%d+") do
+    versions[tonumber(n)].deleted = false
+  end
+  write_store(store)
+  os.exit(0)
+end
+fail(1, "fake-bao: unsupported kv " .. tostring(verb))

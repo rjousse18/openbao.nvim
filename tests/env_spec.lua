@@ -1,0 +1,273 @@
+local helpers = require("tests.helpers")
+local env = require("openbao.env")
+
+local function project(files)
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(root, "p")
+  for name, content in pairs(files) do
+    vim.fn.writefile(vim.split(content, "\n"), root .. "/" .. name)
+  end
+  vim.cmd("cd " .. root)
+  return vim.uv.fs_realpath(root)
+end
+
+local PROFILE_JSON = [[{
+  "default": "dev",
+  "profiles": {
+    "dev": { "sources": ["secret/app/common", { "path": "secret/app/dev", "prefix": "APP_" }], "file": ".env.local" },
+    "bare": { "sources": ["secret/app/common"], "vim_env": false }
+  }
+}]]
+
+describe("env project file", function()
+  after_each(function()
+    vim.cmd("cd /")
+  end)
+
+  it("loads .openbao.json and resolves the default profile", function()
+    local root = project({ [".openbao.json"] = PROFILE_JSON })
+    local path = env.find_file()
+    assert.are.equal(root .. "/.openbao.json", vim.uv.fs_realpath(path))
+    local profile = assert(env.profile(assert(env.load(path)), nil, root))
+    assert.are.equal("dev", profile.name)
+    assert.are.equal("", profile.sources[1].prefix)
+    assert.are.equal("APP_", profile.sources[2].prefix)
+    assert.are.equal(2, profile.push_to)
+    assert.are.equal(root .. "/.env.local", profile.file)
+    assert.is_true(profile.vim_env)
+  end)
+
+  it("finds the file in a parent directory", function()
+    local root = project({ [".openbao.json"] = PROFILE_JSON })
+    vim.fn.mkdir(root .. "/sub/dir", "p")
+    vim.cmd("cd " .. root .. "/sub/dir")
+    assert.are.equal(root .. "/.openbao.json", vim.uv.fs_realpath(env.find_file()))
+  end)
+
+  it("loads a sandboxed .openbao.lua once trusted", function()
+    local root = project({ [".openbao.lua"] = 'return { profiles = { x = { sources = { "secret/a" } } } }' })
+    local original = vim.secure.read
+    vim.secure.read = function(path)
+      return table.concat(vim.fn.readfile(path), "\n")
+    end
+    local cfg = assert(env.load(root .. "/.openbao.lua"))
+    vim.secure.read = original
+    assert.are.equal("secret/a", cfg.profiles.x.sources[1])
+    assert.is_not_nil(env.profile(cfg, nil, root))
+  end)
+
+  it("refuses an untrusted .openbao.lua and a lua file touching globals", function()
+    local root = project({ [".openbao.lua"] = 'return { os.execute("true") }' })
+    local original = vim.secure.read
+    vim.secure.read = function()
+      return nil
+    end
+    local cfg, err = env.load(root .. "/.openbao.lua")
+    assert.is_nil(cfg)
+    assert.matches("not trusted", err)
+    vim.secure.read = function(path)
+      return table.concat(vim.fn.readfile(path), "\n")
+    end
+    cfg, err = env.load(root .. "/.openbao.lua")
+    vim.secure.read = original
+    assert.is_nil(cfg)
+    assert.is_string(err)
+  end)
+
+  it("reports profile errors", function()
+    local cfg = vim.json.decode(PROFILE_JSON)
+    assert.matches("unknown profile 'nope'", select(2, env.profile(cfg, "nope", "/")))
+    cfg.default = nil
+    assert.matches("pick one: bare, dev", select(2, env.profile(cfg, nil, "/")))
+    assert.matches("no sources", select(2, env.profile({ profiles = { p = { sources = {} } } }, "p", "/")))
+    assert.matches(
+      "not one of the sources",
+      select(2, env.profile({ profiles = { p = { sources = { "a/b" }, push_to = "x" } } }, "p", "/"))
+    )
+  end)
+
+  it("explains a missing project file", function()
+    project({})
+    assert.matches("no .openbao.lua", select(2, env.resolve()))
+  end)
+end)
+
+describe("env pull / status / push", function()
+  local dir, root, profile
+  before_each(function()
+    dir = helpers.setup_fake({
+      secrets = {
+        ["secret/app/common"] = { DB_HOST = "db", SHARED = "common" },
+        ["secret/app/dev"] = { TOKEN = "t0", SHARED = "dev" },
+      },
+    })
+    root = project({ [".openbao.json"] = PROFILE_JSON })
+    profile = assert(env.profile(vim.json.decode(PROFILE_JSON), "dev", root))
+    -- .env.local is not git-ignored in this throw-away dir and it is not a git repo: no prompt.
+  end)
+  after_each(function()
+    vim.cmd("cd /")
+    vim.env.DB_HOST, vim.env.APP_TOKEN, vim.env.APP_SHARED, vim.env.SHARED = nil, nil, nil, nil
+  end)
+
+  it("pulls into vim.env and a 0600 file, later sources winning", function()
+    local err, count = helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    assert.is_nil(err)
+    assert.are.equal(4, count)
+    assert.are.equal("db", vim.env.DB_HOST)
+    assert.are.equal("t0", vim.env.APP_TOKEN)
+    assert.are.equal("common", vim.env.SHARED)
+    assert.are.equal("dev", vim.env.APP_SHARED)
+    local file = root .. "/.env.local"
+    assert.are.equal("600", string.format("%o", vim.uv.fs_stat(file).mode % 512))
+    local data = assert(require("openbao.format").parse_dotenv(vim.fn.readfile(file)))
+    assert.are.same({ DB_HOST = "db", SHARED = "common", APP_TOKEN = "t0", APP_SHARED = "dev" }, data)
+    assert.are.equal("# Generated by openbao.nvim from: secret/app/common, secret/app/dev", vim.fn.readfile(file)[1])
+  end)
+
+  it("skips vim.env when the profile disables it and skips non-string values", function()
+    helpers.await(function(done)
+      require("openbao.kv").put("secret/app/common", { DB_HOST = "db", N = 5 }, { cas = 1 }, done)
+    end)
+    local bare = assert(env.profile(vim.json.decode(PROFILE_JSON), "bare", root))
+    local _, fetched
+    _, fetched = helpers.await(function(done)
+      env.fetch(bare, done)
+    end)
+    assert.are.same({ "N" }, fetched.skipped)
+    helpers.await(function(done)
+      env.pull(bare, done)
+    end)
+    assert.is_nil(vim.env.DB_HOST)
+  end)
+
+  it("honours `only`", function()
+    local p = assert(
+      env.profile(
+        { profiles = { p = { sources = { { path = "secret/app/common", only = { "DB_HOST" } } } } } },
+        "p",
+        root
+      )
+    )
+    local _, fetched = helpers.await(function(done)
+      env.fetch(p, done)
+    end)
+    assert.are.same({ DB_HOST = "db" }, fetched.env)
+  end)
+
+  it("fails when a source is missing", function()
+    local p = assert(env.profile({ profiles = { p = { sources = { "secret/missing" } } } }, "p", root))
+    local err = helpers.await(function(done)
+      env.fetch(p, done)
+    end)
+    assert.matches("secret/missing", err)
+  end)
+
+  it("reports status as a diff of names only", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    vim.fn.writefile(
+      { "DB_HOST=other", "SHARED=common", "APP_TOKEN=t0", "APP_SHARED=dev", "EXTRA=1" },
+      root .. "/.env.local"
+    )
+    local _, diff = helpers.await(function(done)
+      env.status(profile, done)
+    end)
+    assert.are.same({ added = { "EXTRA" }, changed = { "DB_HOST" }, removed = {} }, diff)
+  end)
+
+  it("pushes changed values to the owning source and new ones to push_to, keeping other keys", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    vim.fn.writefile(
+      { "DB_HOST=newdb", "SHARED=common", "APP_TOKEN=t0", "APP_SHARED=dev", "APP_NEW=n" },
+      root .. "/.env.local"
+    )
+    local restore = helpers.stub_select({ ["Push to OpenBao"] = "Push" })
+    local err = helpers.await(function(done)
+      env.push(profile, nil, done)
+    end)
+    restore()
+    assert.is_nil(err)
+    assert.are.same({ DB_HOST = "newdb", SHARED = "common" }, helpers.latest(dir, "secret/app/common"))
+    assert.are.same({ TOKEN = "t0", SHARED = "dev", NEW = "n" }, helpers.latest(dir, "secret/app/dev"))
+  end)
+
+  it("removes variables only with prune", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    vim.fn.writefile({ "DB_HOST=db", "SHARED=common", "APP_SHARED=dev" }, root .. "/.env.local")
+    local restore, prompts = helpers.stub_select({ ["Push to OpenBao"] = "Push" })
+    helpers.await(function(done)
+      env.push(profile, nil, done)
+    end)
+    assert.are.same({ TOKEN = "t0", SHARED = "dev" }, helpers.latest(dir, "secret/app/dev"))
+    assert.are.equal(0, #prompts)
+    helpers.await(function(done)
+      env.push(profile, { prune = true }, done)
+    end)
+    restore()
+    assert.matches("%-TOKEN", prompts[1])
+    assert.are.same({ SHARED = "dev" }, helpers.latest(dir, "secret/app/dev"))
+  end)
+
+  it("plan_push ignores new variables outside the prefix of push_to", function()
+    local fetched = { env = {}, owner = {}, remote = { { data = {}, version = 1 }, { data = {}, version = 1 } } }
+    local plans, warnings = env.plan_push(profile, fetched, { WRONG = "x", APP_OK = "y" }, false)
+    assert.are.equal(1, #plans)
+    assert.are.same({ OK = "y" }, plans[1].data)
+    assert.matches("WRONG ignored", warnings[1])
+  end)
+
+  it("does not push without a file, nor with a missing one", function()
+    local bare = assert(env.profile(vim.json.decode(PROFILE_JSON), "bare", root))
+    local err = helpers.await(function(done)
+      pcall(env.push, bare, nil, done)
+    end)
+    assert.matches("needs a `file`", err)
+    os.remove(root .. "/.env.local")
+    local err2 = helpers.await(function(done)
+      pcall(env.push, profile, nil, done)
+    end)
+    assert.matches("does not exist", err2)
+  end)
+
+  it("keeps a conflicting remote edit (cas) instead of overwriting it", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    vim.fn.writefile({ "DB_HOST=mine", "SHARED=common", "APP_TOKEN=t0", "APP_SHARED=dev" }, root .. "/.env.local")
+    local restore = helpers.stub_select({ ["Push to OpenBao"] = "Push" })
+    local original = require("openbao.env").fetch
+    local calls = 0
+    -- Simulate someone else writing between our fetch and our put.
+    require("openbao.env").fetch = function(p, cb)
+      original(p, function(err, fetched)
+        calls = calls + 1
+        helpers.await(function(done)
+          require("openbao.kv").put("secret/app/common", { DB_HOST = "theirs" }, nil, done)
+        end)
+        cb(err, fetched)
+      end)
+    end
+    local err = helpers.await(function(done)
+      pcall(env.push, profile, nil, done)
+    end)
+    require("openbao.env").fetch = original
+    restore()
+    assert.matches("check%-and%-set", err)
+    assert.are.same({ DB_HOST = "theirs" }, helpers.latest(dir, "secret/app/common"))
+  end)
+
+  it("adds the file to .gitignore once", function()
+    local file = root .. "/.env.local"
+    assert.is_true(env.gitignore(file))
+    assert.is_false(env.gitignore(file))
+    assert.are.same({ ".env.local" }, vim.fn.readfile(root .. "/.gitignore"))
+  end)
+end)

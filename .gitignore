@@ -1,0 +1,4 @@
+.deps/
+.openbao/
+.env
+.env.*
