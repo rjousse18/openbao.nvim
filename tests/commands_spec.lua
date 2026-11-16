@@ -21,7 +21,7 @@ describe(":Bao command", function()
     end
     commands.run({ fargs = { "nope" } })
     vim.notify = original
-    assert.matches("usage: :Bao <browse|delete|edit", seen)
+    assert.matches("usage: :Bao <browse|delete|diff|edit", seen)
   end)
 
   it("completes subcommands, then arguments", function()
