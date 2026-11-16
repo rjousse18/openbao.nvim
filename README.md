@@ -18,6 +18,30 @@ It drives the `bao` / `vault` CLI, so login, TLS and namespaces behave exactly l
 - `bao` or `vault` in `$PATH`, with `BAO_ADDR` (or `VAULT_ADDR`) set, e.g. `export BAO_ADDR=https://bao.example.com`
 - A KV **v2** mount (KV v1 is not supported)
 
+### Installing the CLI
+
+The plugin does **not** install or manage the binary: it only runs the one it finds. Install one of them yourself.
+
+| System | OpenBao (`bao`) |
+|---|---|
+| macOS | `brew install openbao` |
+| Arch | `sudo pacman -Sy openbao` |
+| Fedora / RHEL | `sudo dnf install -y epel-release openbao` (EPEL on RHEL) |
+| Debian / Ubuntu | `.deb` from the [downloads page](https://openbao.org/downloads/) |
+| Any | unzip the release archive, put `bao` in your `$PATH` |
+
+Vault users: the HashiCorp `vault` binary works too (auto-detected when `bao` is absent, or set `binary = "vault"`).
+Other options: [openbao.org/docs/install](https://openbao.org/docs/install/).
+
+Then set the address (shell profile) and check:
+
+```sh
+export BAO_ADDR=https://bao.example.com
+bao version
+```
+
+In Neovim: `:checkhealth openbao`, then `:Bao login`.
+
 ## Install
 
 lazy.nvim:
