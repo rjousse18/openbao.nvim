@@ -82,6 +82,8 @@ Run `:checkhealth openbao` to verify the binary, address, login and mounts.
 | `:Bao versions [path]` | History: view, roll back, undelete |
 | `:Bao delete [path]` | Soft-delete the latest version (recoverable from `:Bao versions`) |
 | `:Bao env pull\|push\|status\|gitignore [profile] [--prune]` | Sync a project's environment, see below |
+| `:Bao env load [file]` / `:Bao env unload` | Put a `.env*` file of the project into `vim.env` (picker if no file), or remove it again |
+| `:Bao generate-conf [profile] [paths...] [--force]` | Add a profile to `.openbao.json` (picker when no path is given) |
 | `:Bao project pull\|status\|push [prefixes] [--force]` | Local mirror directory of secrets, see below |
 
 Paths are always `mount/path/to/secret`. The mount is detected with `secrets list`
@@ -127,9 +129,25 @@ so it is safe to commit:
 :Bao env pull        " OpenBao -> vim.env (+ .env.local, mode 0600)
 :Bao env status      " diff of variable NAMES, remote vs local
 :Bao env push        " .env.local -> OpenBao, after a confirmation listing the changes
+:Bao env load        " pick a .env* file of the project and inject it into vim.env (edit the file first for a hybrid)
 ```
 
+Instead of writing the file by hand, generate it:
+
+```vim
+:Bao generate-conf uat1 secret/myapp/common secret/myapp/uat1   " profile uat1 -> .env.uat1
+:Bao generate-conf uat2                                         " no path: pick the sources in the picker
+```
+
+It creates `.openbao.json` at the git root (or cwd), or adds the profile to the nearest existing `.openbao.json`
+(an existing `.openbao.lua` is never edited). The profile's file is `.env.<profile>`, added to `.gitignore` inside a git
+repository. An existing profile is replaced only with `--force`. Keys of an existing file are rewritten in a fixed order.
+
 - Sources are merged in order, **later sources win**. `prefix` is prepended to every key (`TOKEN` becomes `APP_TOKEN`).
+- `to_env` (per source) renames keys that are not environment-style, as Spring Boot does for environment variables:
+  dots become `_`, dashes are dropped, upper case (`receivit.kafka-framework.user` -> `RECEIVIT_KAFKAFRAMEWORK_USER`).
+  Names like `MY_VAR` are kept. `prefix` is applied first. A changed value is pushed back to its original key;
+  new variables cannot be pushed to such a source, and two keys mapping to one name keep only the first (with a warning).
 - `vim.env` is set by default (terminals and jobs started from Neovim inherit it). Disable with `"vim_env": false`.
 - `file` is **fully generated**: keep hand-written local variables in another file.
 - `push` needs `file`. Changed values go back to the source that owns them, new variables to `push_to`
@@ -139,6 +157,8 @@ so it is safe to commit:
 - When the generated file is not git-ignored, you are offered to add it to `.gitignore`.
 
 More patterns (direnv, per-environment profiles, team workflow): [docs/env-sync.md](docs/env-sync.md).
+Spring Boot users: variables named like the property (`RECEIVIT_KAFKA_...`) override `application.properties` by themselves,
+see [Spring Boot section](docs/env-sync.md#spring-boot-environment-variables-override-applicationproperties).
 
 ## Local mirror of a folder (optional)
 

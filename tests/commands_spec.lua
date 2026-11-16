@@ -26,7 +26,7 @@ describe(":Bao command", function()
 
   it("completes subcommands, then arguments", function()
     assert.are.same({ "edit", "env" }, commands.complete("e", "Bao e"))
-    assert.are.same({ "pull", "push", "status", "gitignore" }, commands.complete("", "Bao env "))
+    assert.are.same({ "pull", "push", "status", "load", "unload", "gitignore" }, commands.complete("", "Bao env "))
     assert.are.same({ "pull", "push" }, commands.complete("pu", "Bao project pu"))
     assert.are.same({ "--prune" }, commands.complete("--p", "Bao env pull --p"))
   end)

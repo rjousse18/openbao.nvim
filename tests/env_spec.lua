@@ -1,5 +1,6 @@
 local helpers = require("tests.helpers")
 local env = require("openbao.env")
+local format = require("openbao.format")
 
 local function project(files)
   local root = vim.fn.tempname()
@@ -216,6 +217,43 @@ describe("env pull / status / push", function()
     assert.are.same({ SHARED = "dev" }, helpers.latest(dir, "secret/app/dev"))
   end)
 
+  it("keeps commented-out variables commented on pull, refreshes them, and never prunes or injects them", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    local lines = vim.fn.readfile(root .. "/.env.local")
+    local fresh
+    for i, line in ipairs(lines) do
+      if line:match("^DB_HOST=") then
+        fresh = line
+        lines[i] = "# DB_HOST=stale"
+      end
+    end
+    vim.fn.writefile(lines, root .. "/.env.local")
+    vim.env.DB_HOST = nil
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    local after = vim.fn.readfile(root .. "/.env.local")
+    assert.is_true(vim.tbl_contains(after, "# " .. fresh))
+    assert.is_false(vim.tbl_contains(after, fresh))
+    assert.is_nil(vim.env.DB_HOST)
+    local diff
+    helpers.await(function(done)
+      env.status(profile, function(err, d)
+        diff = d
+        done(err)
+      end)
+    end)
+    assert.is_true(format.is_empty(diff))
+    local restore, prompts = helpers.stub_select({ ["Push to OpenBao"] = "Push" })
+    helpers.await(function(done)
+      env.push(profile, { prune = true }, done)
+    end)
+    restore()
+    assert.are.equal(0, #prompts)
+  end)
+
   it("plan_push ignores new variables outside the prefix of push_to", function()
     local fetched = { env = {}, owner = {}, remote = { { data = {}, version = 1 }, { data = {}, version = 1 } } }
     local plans, warnings = env.plan_push(profile, fetched, { WRONG = "x", APP_OK = "y" }, false)
@@ -269,5 +307,139 @@ describe("env pull / status / push", function()
     assert.is_true(env.gitignore(file))
     assert.is_false(env.gitignore(file))
     assert.are.same({ ".env.local" }, vim.fn.readfile(root .. "/.gitignore"))
+  end)
+end)
+
+describe("env to_env", function()
+  it("env_name follows Spring's relaxed binding and keeps variable-style names", function()
+    assert.are.equal("RECEIVIT_KAFKAFRAMEWORK_SECURITY_SASL_PASSWORD", env.env_name("receivit.kafka-framework.security.sasl.password"))
+    assert.are.equal("MY_VAR", env.env_name("MY_VAR"))
+    assert.are.equal("MY_VAR", env.env_name("my_var"))
+    assert.are.equal("_1_A", env.env_name("1.a"))
+    assert.are.equal("APP_KAFKA_URL", env.env_name("APP_kafka.url"))
+  end)
+
+  describe("with a source", function()
+    local dir, root, profile
+    before_each(function()
+      dir = helpers.setup_fake({
+        secrets = {
+          ["secret/app/dev"] = { ["kafka.sasl-user"] = "u", ["kafka.sasl-pass"] = "p", PLAIN_VAR = "v" },
+        },
+      })
+      root = project({})
+      profile = assert(
+        env.profile(
+          { profiles = { p = { sources = { { path = "secret/app/dev", to_env = true } }, file = ".env.p" } } },
+          "p",
+          root
+        )
+      )
+    end)
+    after_each(function()
+      vim.cmd("cd /")
+      vim.env.KAFKA_SASLUSER, vim.env.KAFKA_SASLPASS, vim.env.PLAIN_VAR = nil, nil, nil
+    end)
+
+    it("pulls renamed variables into vim.env and the file", function()
+      helpers.await(function(done)
+        env.pull(profile, done)
+      end)
+      assert.are.equal("u", vim.env.KAFKA_SASLUSER)
+      local data = assert(require("openbao.format").parse_dotenv(vim.fn.readfile(root .. "/.env.p")))
+      assert.are.same({ KAFKA_SASLUSER = "u", KAFKA_SASLPASS = "p", PLAIN_VAR = "v" }, data)
+    end)
+
+    it("pushes a changed value back to its original key, and refuses new variables", function()
+      helpers.await(function(done)
+        env.pull(profile, done)
+      end)
+      local _, fetched = helpers.await(function(done)
+        env.fetch(profile, done)
+      end)
+      local plans, warnings = env.plan_push(
+        profile,
+        fetched,
+        { KAFKA_SASLUSER = "changed", KAFKA_SASLPASS = "p", PLAIN_VAR = "v", BRAND_NEW = "x" },
+        false
+      )
+      assert.are.equal(1, #plans)
+      assert.are.equal("changed", plans[1].data["kafka.sasl-user"])
+      assert.is_nil(plans[1].data.KAFKA_SASLUSER)
+      assert.is_nil(plans[1].data.BRAND_NEW)
+      assert.matches("BRAND_NEW ignored", warnings[1])
+    end)
+
+    it("prunes through the original key", function()
+      local _, fetched = helpers.await(function(done)
+        env.fetch(profile, done)
+      end)
+      local plans = env.plan_push(profile, fetched, { KAFKA_SASLPASS = "p", PLAIN_VAR = "v" }, true)
+      assert.are.same({ "kafka.sasl-user" }, plans[1].diff.removed)
+    end)
+
+    it("reports two keys that map to the same variable and keeps the first", function()
+      helpers.await(function(done)
+        require("openbao.kv").put("secret/app/dev", { ["a.b-c"] = "1", ["a.bc"] = "2" }, { cas = 1 }, done)
+      end)
+      local _, fetched = helpers.await(function(done)
+        env.fetch(profile, done)
+      end)
+      assert.are.same({ "A_BC" }, fetched.collisions)
+      assert.are.equal("1", fetched.env.A_BC)
+    end)
+  end)
+end)
+
+
+describe("env load", function()
+  after_each(function()
+    env.unload()
+    vim.cmd("cd /")
+  end)
+
+  it("lists .env files of the project and loads one into vim.env without a shell", function()
+    project({
+      [".env.uat1"] = 'LOAD_A="pa$$ $(x) è"\nLOAD_B=2',
+      [".env.dev"] = "LOAD_C=3",
+      ["README.md"] = "x",
+    })
+    assert.are.same({ ".env.dev", ".env.uat1" }, env.list_files())
+    assert.are.equal(2, env.load_file(env.files_root() .. "/.env.uat1"))
+    assert.are.equal("pa$$ $(x) è", vim.env.LOAD_A)
+  end)
+
+  it("replaces the variables of the previously loaded file", function()
+    project({ [".env.a"] = "LOAD_A=1", [".env.b"] = "LOAD_B=2" })
+    env.load_file(env.files_root() .. "/.env.a")
+    env.load_file(env.files_root() .. "/.env.b")
+    assert.is_nil(vim.env.LOAD_A)
+    assert.are.equal("2", vim.env.LOAD_B)
+    assert.are.equal(1, env.unload())
+    assert.is_nil(vim.env.LOAD_B)
+  end)
+
+  it("rejects an invalid file and keeps what was loaded", function()
+    project({ [".env.a"] = "LOAD_A=1", [".env.bad"] = "not a pair" })
+    env.load_file(env.files_root() .. "/.env.a")
+    local count, err = env.load_file(env.files_root() .. "/.env.bad")
+    assert.is_nil(count)
+    assert.matches("line 1", err)
+    assert.are.equal("1", vim.env.LOAD_A)
+  end)
+
+  it(":Bao env load asks which file and :Bao env load <file> skips the question", function()
+    project({ [".env.a"] = "LOAD_A=1", [".env.b"] = "LOAD_B=2" })
+    local restore = helpers.stub_select({ ["vim.env"] = ".env.b" })
+    vim.cmd("Bao env load")
+    vim.wait(1000, function()
+      return vim.env.LOAD_B ~= nil
+    end)
+    restore()
+    assert.are.equal("2", vim.env.LOAD_B)
+    vim.cmd("Bao env load .env.a")
+    assert.are.equal("1", vim.env.LOAD_A)
+    assert.is_nil(vim.env.LOAD_B)
+    assert.are.same({ ".env.a", ".env.b" }, require("openbao.commands").complete("", "Bao env load "))
   end)
 end)

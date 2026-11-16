@@ -77,6 +77,8 @@ if cmd == "secrets" then
     res[m .. "/"] = { type = "kv", options = { version = "2" } }
   end
   res["sys/"] = { type = "system" }
+  -- real servers return `"options": null` for some mounts (cubbyhole, identity)
+  res["cubbyhole/"] = { type = "ns_cubbyhole", options = vim.NIL }
   out(res)
 end
 

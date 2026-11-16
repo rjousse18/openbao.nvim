@@ -34,6 +34,56 @@ Prefer `vim.env` only when you can: no file means no leak. Run `:Bao env pull` o
 - `only` limits what you pull (`"only": ["DB_URL", "API_KEY"]`): useful for a secret that holds more than the app needs.
 - Values that are not strings (numbers, nested objects) are skipped on pull with a warning, and preserved on push.
 
+## Spring Boot: environment variables override `application.properties`
+
+Spring Boot binds environment variables to properties by itself ("relaxed binding"): the variable
+`RECEIVIT_KAFKAFRAMEWORK_SECURITY_SASL_PASSWORD` is matched to `receivit.kafka-framework.security.sasl.password`
+and **wins over the value in `application.properties`**. Nothing to change in the application.
+The rule: upper case, dots become `_`, dashes are dropped. So the variable must keep the full name, a shortened one
+would not be matched to any property.
+
+### Property-style keys (`to_env`)
+
+When the secret stores property names (`receivit.kafka-framework.security.sasl.password`), a shell cannot export them.
+`{ "path": "secret/app/uat1", "to_env": true }` renames them on pull with the rule above, so `.env.uat1` can be
+sourced and Spring still binds the property. Names already in `MY_VAR` style are kept.
+`push` maps a changed value back to its original key; new variables cannot be pushed to a `to_env` source.
+
+### Launch the application with the variables
+
+```sh
+:Bao env pull uat1                  # in Neovim, once per session (the token lasts a few hours)
+set -a; source .env.uat1; set +a    # in the shell: export every variable of the file
+./mvnw spring-boot:run
+```
+
+- From a terminal opened in Neovim (`:terminal`), the variables are already there after `:Bao env pull`:
+  `vim.env` is inherited, no `source` needed.
+- IntelliJ: an "EnvFile" plugin pointing at `.env.uat1`, or paste the variables in "Environment variables".
+- A value containing `$` or a backtick is expanded by the shell when sourced: check such values.
+- Variables you do not pull keep the default of `application.properties`.
+- Pointing the app at UAT services from your machine is a real connection (Kafka consumer group, database).
+
+### Several `.env` files: pick the one to inject
+
+```
+:Bao env load            " picker over .env, .env.uat1, .env.dev... of the project
+:Bao env load .env.uat1  " directly
+:Bao env unload          " remove what was loaded
+```
+
+- The file is read and put in `vim.env` by Neovim itself: no shell, so `$`, backticks and accents are kept as is.
+- Hybrid: the file is plain text. Delete or comment (`#`) the lines you do not want before loading;
+  those properties keep the default of `application.properties`. `:Bao env pull` does not touch the choice,
+  `:Bao env load` simply reads the file as it is now.
+- Commented lines survive `:Bao env pull`: a line written `# NAME=value` stays commented and gets the fresh value.
+  It is not put in `vim.env`, `:Bao env status` does not report it, and `push --prune` never deletes it from OpenBao.
+  To enable it again, remove the `# `.
+- Loading another file first removes the variables of the previous one, so two environments never mix.
+- Then run the application from a `:terminal` (or your run config): children of Neovim inherit `vim.env`.
+- Files searched: `.env` and `.env.*` next to the project file (`.openbao.json`), else in the cwd.
+- Nothing is injected outside Neovim; use `source` (see above) for a shell.
+
 ## Push, safely
 
 1. Edit `.env.local`.

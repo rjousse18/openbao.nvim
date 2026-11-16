@@ -47,6 +47,7 @@ call() -> failure looks like auth (permission denied / missing client token / 40
 
 ## Env sync
 
+`generate.lua` (`:Bao generate-conf`) writes profiles into `.openbao.json`.
 `.openbao.json|lua` -> `env.profile` -> `env.fetch` (all sources in parallel, merged in order, `owner[NAME]` = last source
 providing it) -> `pull` writes `vim.env` / file. `push` runs `env.plan_push` (pure): changed values go to their owner,
 new variables to `push_to`, removals only with `prune`; then one `kv.put` per touched source with its own `cas`.

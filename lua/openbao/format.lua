@@ -47,6 +47,20 @@ function M.dotenv_lines(data)
   return lines
 end
 
+--- Names of variables disabled by commenting their line out (`# KEY=value`).
+---@param lines string[]
+---@return table<string, true> names
+function M.disabled_names(lines)
+  local names = {}
+  for _, line in ipairs(lines) do
+    local name = line:match("^#%s*export%s+([%w_.%-]+)%s*=") or line:match("^#%s*([%w_.%-]+)%s*=")
+    if name then
+      names[name] = true
+    end
+  end
+  return names
+end
+
 --- Parses `KEY=value` lines. Blank lines and `#` comments are ignored (and not stored).
 ---@param lines string[]
 ---@return table<string, string>? data

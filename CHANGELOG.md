@@ -2,7 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- Mount discovery crashed (`attempt to index vim.NIL`) when `secrets list` returned a mount with `"options": null`.
+
 ### Added
+- `:Bao env pull` keeps variables commented out in the `.env` file (`# KEY=value`) commented, refreshes their value, and skips them in `vim.env`; `status` and `push --prune` ignore them.
+- `:Bao env load [file]` and `:Bao env unload`: inject a `.env*` file of the project into `vim.env` (picker when several files exist; no shell, so `$` and accents are safe).
+- `to_env` option on env sources: rewrites keys such as `a.b-c` into environment-style names (`A_BC`) on pull.
+- `:Bao generate-conf [profile] [paths...] [--force]`: scaffolds a profile (`.env.<profile>`) in `.openbao.json`.
 - Initial version: `:Bao` command with `login`, `status`, `browse`, `search`, `edit`, `new`, `reload`, `diff`, `reveal`,
   `versions`, `delete`, `env` and `project`.
 - Secret buffers (`openbao://mount/path`): dotenv or JSON, `:w` writes with check-and-set, confirmation before removing keys,

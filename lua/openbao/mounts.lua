@@ -32,7 +32,8 @@ function M.list(cb)
     end
     local mounts = {}
     for path, info in pairs(res.json or {}) do
-      local version = info.options and info.options.version
+      -- `options` can be JSON null (decoded as vim.NIL, which is truthy but not indexable)
+      local version = type(info.options) == "table" and info.options.version
       if info.type == "kv" and tostring(version) == "2" then
         mounts[#mounts + 1] = (path:gsub("/$", ""))
       end

@@ -147,7 +147,7 @@ M.subcommands = {
     complete = path_candidates,
   },
   env = {
-    desc = "env pull|push|status|gitignore [profile] [--prune]: sync a project's environment",
+    desc = "env pull|push|status|load|unload|gitignore [profile|file] [--prune]: sync a project's environment",
     run = function(args, flags)
       local action, name = args[1], args[2]
       local env = require("openbao.env")
@@ -175,6 +175,28 @@ M.subcommands = {
             )
           end)
         end
+      elseif action == "load" then
+        local function load(file)
+          local count, err = env.load_file(vim.fn.fnamemodify(file, ":p"))
+          if not count then
+            return util.error(err)
+          end
+          util.notify(("loaded %d variable(s) from %s into vim.env"):format(count, vim.fs.basename(file)))
+        end
+        if name then
+          return load(vim.startswith(name, "/") and name or (env.files_root() .. "/" .. name))
+        end
+        local files = env.list_files()
+        if #files == 0 then
+          return util.error("no .env file in " .. env.files_root())
+        end
+        require("openbao.picker").select(files, { prompt = "Load into vim.env" }, function(choice)
+          if choice then
+            load(env.files_root() .. "/" .. choice)
+          end
+        end)
+      elseif action == "unload" then
+        util.notify(("removed %d variable(s) from vim.env"):format(env.unload()))
       elseif action == "gitignore" then
         local p = profile_or_error(name)
         if p and p.file then
@@ -183,14 +205,30 @@ M.subcommands = {
           util.error("this profile has no `file`")
         end
       else
-        util.error("usage: :Bao env pull|push|status|gitignore [profile] [--prune]")
+        util.error("usage: :Bao env pull|push|status|load|unload|gitignore [profile|file] [--prune]")
       end
     end,
     complete = function(args)
       if #args == 0 then
-        return { "pull", "push", "status", "gitignore" }
+        return { "pull", "push", "status", "load", "unload", "gitignore" }
+      end
+      if args[1] == "load" and #args == 1 then
+        return require("openbao.env").list_files()
       end
       return { "--prune" }
+    end,
+  },
+  ["generate-conf"] = {
+    desc = "generate-conf [profile] [paths...] [--force]: add a profile to .openbao.json",
+    run = function(args, flags)
+      local name = table.remove(args, 1)
+      require("openbao.generate").run(name, args, flags.force)
+    end,
+    complete = function(args)
+      if #args == 0 then
+        return {}
+      end
+      return vim.list_extend({ "--force" }, path_candidates())
     end,
   },
   project = {
