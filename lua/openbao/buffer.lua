@@ -277,4 +277,35 @@ function M.reload(buf)
   end
 end
 
+--- Side-by-side diff of the buffer against the secret as it is on the server right now (not as opened),
+--- so a concurrent remote change is visible too. Values are shown: this is an explicit user action.
+---@param buf? integer
+function M.diff(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local st = states[buf]
+  if not st or st.readonly then
+    return util.error("not an editable OpenBao buffer")
+  end
+  kv.get(st.full, nil, function(err, secret)
+    if err and err.kind ~= "not_found" then
+      return util.error(err.msg)
+    end
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    local ref = vim.api.nvim_create_buf(false, true)
+    vim.bo[ref].swapfile = false
+    vim.bo[ref].undofile = false
+    vim.api.nvim_buf_set_lines(ref, 0, -1, false, format.to_lines(st.format, secret and secret.data or {}))
+    vim.bo[ref].filetype = st.format
+    vim.bo[ref].modifiable = false
+    vim.bo[ref].bufhidden = "wipe"
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd("diffthis")
+    vim.cmd("leftabove vertical sbuffer " .. ref)
+    vim.cmd("diffthis")
+    vim.cmd("wincmd p")
+  end)
+end
+
 return M

@@ -161,4 +161,25 @@ describe("secret buffer", function()
       return vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1] == "USER=remote"
     end, 10))
   end)
+  it("diffs the buffer against the current server content", function()
+    local buf = open("secret/app/db")
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "USER=changed", "PASS=p w" })
+    helpers.await(function(done)
+      require("openbao.kv").put("secret/app/db", { USER = "u", PASS = "p w", NEW = "1" }, { cas = 1 }, done)
+    end)
+    buffer.diff(buf)
+    assert.is_true(vim.wait(10000, function()
+      return #vim.api.nvim_tabpage_list_wins(0) == 2
+    end, 10))
+    local remote
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      assert.is_true(vim.wo[w].diff)
+      local b = vim.api.nvim_win_get_buf(w)
+      if b ~= buf then
+        remote = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+      end
+    end
+    assert.are.same({ "NEW=1", 'PASS="p w"', "USER=u" }, remote)
+    assert.are.same({ "USER=changed", "PASS=p w" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  end)
 end)

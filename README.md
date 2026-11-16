@@ -53,6 +53,7 @@ Run `:checkhealth openbao` to verify the binary, address, login and mounts.
 | `:Bao edit [path]` | Open a secret in a buffer; without a path, same as `browse` |
 | `:Bao new <path>` | Open an empty buffer; `:w` creates the secret (fails if it appeared meanwhile) |
 | `:Bao reload` | Re-read the current secret (asks before dropping unsaved edits) |
+| `:Bao diff` | Side-by-side diff of the buffer vs. the server's current version (shows values) |
 | `:Bao reveal` | Show / hide values (also `<LocalLeader>r`) |
 | `:Bao versions [path]` | History: view, roll back, undelete |
 | `:Bao delete [path]` | Soft-delete the latest version (recoverable from `:Bao versions`) |
@@ -73,6 +74,7 @@ USER=u
 
 - `:w` writes the whole secret (KV `put`), with check-and-set on the version you opened.
   - Keys removed from the buffer are listed in a confirmation prompt first.
+  - Each successful write creates a **new KV v2 version** (see `:Bao versions`). Preview with `:Bao diff` first.
   - Remote changed meanwhile: the write is refused. `:Bao reload` to refresh or `:w!` to overwrite.
   - `:wq` only quits once the (asynchronous) save has finished: use `:w` then `:q` if it stays open.
 - Format: `KEY=value` lines, quoted when needed (`"a b"`, `\n` escapes). Comments and blank lines are

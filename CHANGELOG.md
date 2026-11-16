@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Initial version: `:Bao` command with `login`, `status`, `browse`, `search`, `edit`, `new`, `reload`, `reveal`,
+- Initial version: `:Bao` command with `login`, `status`, `browse`, `search`, `edit`, `new`, `reload`, `diff`, `reveal`,
   `versions`, `delete`, `env` and `project`.
 - Secret buffers (`openbao://mount/path`): dotenv or JSON, `:w` writes with check-and-set, confirmation before removing keys,
   concealed values, no swap/undo files.

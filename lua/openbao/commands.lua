@@ -98,6 +98,12 @@ M.subcommands = {
       require("openbao.buffer").reload()
     end,
   },
+  diff = {
+    desc = "diff the current secret buffer against the server version",
+    run = function()
+      require("openbao.buffer").diff()
+    end,
+  },
   reveal = {
     desc = "show / hide values in the current secret buffer",
     run = function()
