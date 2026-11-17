@@ -190,9 +190,15 @@ M.subcommands = {
         if #files == 0 then
           return util.error("no .env file in " .. env.files_root())
         end
-        require("openbao.picker").select(files, { prompt = "Load into vim.env" }, function(choice)
+        local current = env.loaded()
+        local mark = "✔ "
+        local items = vim.tbl_map(function(f)
+          local active = current and current.file == (vim.uv.fs_realpath(env.files_root() .. "/" .. f) or "")
+          return active and (mark .. f) or f
+        end, files)
+        require("openbao.picker").select(items, { prompt = "Load into vim.env" }, function(choice)
           if choice then
-            load(env.files_root() .. "/" .. choice)
+            load(env.files_root() .. "/" .. choice:gsub("^" .. mark, ""))
           end
         end)
       elseif action == "unload" then

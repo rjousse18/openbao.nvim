@@ -242,6 +242,86 @@ local function offer_gitignore(path)
   end)
 end
 
+---@type string[] names set by the last load or pull, removed again by the next one or `unload`
+local loaded = {}
+---@type { label: string, file?: string, mtime?: string }? what `loaded` came from
+local source
+
+local ns = vim.api.nvim_create_namespace("openbao_env")
+
+---@param path string
+---@return string? mtime "sec.nsec", changes whenever the file is rewritten
+local function stamp(path)
+  local st = vim.uv.fs_stat(path)
+  return st and ("%d.%d"):format(st.mtime.sec, st.mtime.nsec) or nil
+end
+
+---@param path string
+---@return string
+local function real(path)
+  return vim.uv.fs_realpath(path) or vim.fn.fnamemodify(path, ":p")
+end
+
+--- What is currently injected in `vim.env` by `load_file` / `pull`, if anything.
+---@return { label: string, file?: string, count: integer, stale: boolean }?
+function M.loaded()
+  if not source or #loaded == 0 then
+    return nil
+  end
+  return {
+    label = source.label,
+    file = source.file,
+    count = #loaded,
+    stale = source.file ~= nil and stamp(source.file) ~= source.mtime,
+  }
+end
+
+--- Short text for a statusline (`require("openbao").statusline()`), empty when nothing is loaded.
+---@return string
+function M.statusline()
+  local l = M.loaded()
+  if not l then
+    return ""
+  end
+  return "🔐 " .. l.label .. (l.stale and " ⚠" or "")
+end
+
+--- Mark a `.env` buffer: loaded in `vim.env` (✔), or changed on disk since it was loaded (⚠).
+---@param buf integer
+function M.decorate(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  local l = M.loaded()
+  local name = vim.api.nvim_buf_get_name(buf)
+  if not (l and l.file and name ~= "" and real(name) == l.file) then
+    return
+  end
+  local text, hl = ("✔ loaded in vim.env (%d variables)"):format(l.count), "DiagnosticOk"
+  if l.stale then
+    text, hl = "⚠ changed since it was loaded, run :Bao env load to refresh", "DiagnosticWarn"
+  end
+  vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { virt_text = { { text, hl } }, virt_text_pos = "eol" })
+end
+
+local function decorate_all()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) then
+      M.decorate(buf)
+    end
+  end
+end
+
+--- Record what was injected, so that it can be shown and removed again.
+---@param names string[]
+---@param src { label: string, file?: string }
+local function track(names, src)
+  loaded = names
+  source = { label = src.label, file = src.file, mtime = src.file and stamp(src.file) }
+  decorate_all()
+end
+
 ---@param profile OpenBaoProfile
 ---@param cb? fun(err: string?, count: integer?)
 function M.pull(profile, cb)
@@ -259,16 +339,23 @@ function M.pull(profile, cb)
         disabled[name] = fetched.env[name] ~= nil or nil
       end
     end
+    local injected = {}
     if profile.vim_env then
+      M.unload()
       for name, value in pairs(fetched.env) do
         if not disabled[name] then
           vim.env[name] = value
+          injected[#injected + 1] = name
         end
       end
     end
     if profile.file then
       M.write_file(profile.file, fetched.env, profile.sources, disabled)
       offer_gitignore(profile.file)
+    end
+    if profile.vim_env then
+      table.sort(injected)
+      track(injected, { label = profile.file and vim.fs.basename(profile.file) or profile.name, file = profile.file and real(profile.file) })
     end
     local where = {}
     if profile.vim_env then
@@ -290,9 +377,6 @@ function M.pull(profile, cb)
     cb(nil, count)
   end)
 end
-
----@type string[] names set by the last `load_file`, removed again by the next load or `unload`
-local loaded = {}
 
 --- Directory searched for `.env*` files: the project file's, else the cwd.
 ---@return string
@@ -323,6 +407,8 @@ function M.unload()
     vim.env[name] = nil
   end
   loaded = {}
+  source = nil
+  decorate_all()
   return count
 end
 
@@ -341,11 +427,12 @@ function M.load_file(path)
     return nil, ("%s: %s"):format(vim.fs.basename(path), table.concat(errors or {}, "; "))
   end
   M.unload()
-  for _, name in ipairs(util.sorted_keys(data)) do
+  local names = util.sorted_keys(data)
+  for _, name in ipairs(names) do
     vim.env[name] = data[name]
-    loaded[#loaded + 1] = name
   end
-  return #loaded
+  track(names, { label = vim.fs.basename(path), file = real(path) })
+  return #names
 end
 
 --- Local values to compare with: the generated file, else the current `vim.env`.

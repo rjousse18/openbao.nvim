@@ -34,4 +34,11 @@ M.env_pull = function(profile)
   require("openbao.env").pull(p)
 end
 
+--- Text for a statusline: the `.env` file (or profile) loaded in `vim.env`, empty when none.
+--- lualine: `sections = { lualine_x = { require("openbao").statusline } }`
+---@return string
+M.statusline = function()
+  return require("openbao.env").statusline()
+end
+
 return M

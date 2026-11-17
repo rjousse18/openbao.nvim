@@ -79,6 +79,10 @@ set -a; source .env.uat1; set +a    # in the shell: export every variable of the
 - Commented lines survive `:Bao env pull`: a line written `# NAME=value` stays commented and gets the fresh value.
   It is not put in `vim.env`, `:Bao env status` does not report it, and `push --prune` never deletes it from OpenBao.
   To enable it again, remove the `# `.
+- Which one is active? `:Bao env load` marks it `✔` in the picker; a `.env` buffer shows `✔ loaded in vim.env`
+  (or `⚠ changed since it was loaded` after an edit); `require("openbao").statusline()` gives `🔐 .env.uat1`
+  (`⚠` appended when the file changed since). `:Bao env pull` counts as loaded too. lualine:
+  `sections = { lualine_x = { require("openbao").statusline } }`.
 - Loading another file first removes the variables of the previous one, so two environments never mix.
 - Then run the application from a `:terminal` (or your run config): children of Neovim inherit `vim.env`.
 - Files searched: `.env` and `.env.*` next to the project file (`.openbao.json`), else in the cwd.

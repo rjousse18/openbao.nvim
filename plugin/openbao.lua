@@ -3,6 +3,14 @@ if vim.g.loaded_openbao or vim.fn.has("nvim-0.10") == 0 then
 end
 vim.g.loaded_openbao = true
 
+vim.api.nvim_create_autocmd({ "BufWinEnter", "BufWritePost" }, {
+  pattern = { ".env", ".env.*" },
+  desc = "OpenBao: mark the .env file loaded in vim.env",
+  callback = function(ev)
+    require("openbao.env").decorate(ev.buf)
+  end,
+})
+
 vim.api.nvim_create_user_command("Bao", function(opts)
   require("openbao.commands").run(opts)
 end, {

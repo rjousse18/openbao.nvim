@@ -6,6 +6,7 @@
 - Mount discovery crashed (`attempt to index vim.NIL`) when `secrets list` returned a mount with `"options": null`.
 
 ### Added
+- Show which env is loaded in `vim.env`: `✔` in the `:Bao env load` picker, a virtual-text mark in the `.env` buffer (`⚠` when it changed since), and `require("openbao").statusline()`.
 - `:Bao env pull` keeps variables commented out in the `.env` file (`# KEY=value`) commented, refreshes their value, and skips them in `vim.env`; `status` and `push --prune` ignore them.
 - `:Bao env load [file]` and `:Bao env unload`: inject a `.env*` file of the project into `vim.env` (picker when several files exist; no shell, so `$` and accents are safe).
 - `to_env` option on env sources: rewrites keys such as `a.b-c` into environment-style names (`A_BC`) on pull.

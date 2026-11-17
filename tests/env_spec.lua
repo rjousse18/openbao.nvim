@@ -254,6 +254,15 @@ describe("env pull / status / push", function()
     assert.are.equal(0, #prompts)
   end)
 
+  it("pull records what it injected,", function()
+    helpers.await(function(done)
+      env.pull(profile, done)
+    end)
+    assert.are.equal("🔐 .env.local", env.statusline())
+    assert.is_true(env.loaded().count > 0)
+    env.unload()
+  end)
+
   it("plan_push ignores new variables outside the prefix of push_to", function()
     local fetched = { env = {}, owner = {}, remote = { { data = {}, version = 1 }, { data = {}, version = 1 } } }
     local plans, warnings = env.plan_push(profile, fetched, { WRONG = "x", APP_OK = "y" }, false)
@@ -441,5 +450,44 @@ describe("env load", function()
     assert.are.equal("1", vim.env.LOAD_A)
     assert.is_nil(vim.env.LOAD_B)
     assert.are.same({ ".env.a", ".env.b" }, require("openbao.commands").complete("", "Bao env load "))
+  end)
+
+  it("reports what is loaded: statusline, stale flag, buffer mark and picker mark", function()
+    local root = project({ [".env.a"] = "LOAD_A=1", [".env.b"] = "LOAD_B=2" })
+    assert.are.equal("", env.statusline())
+    assert.is_nil(env.loaded())
+    env.load_file(root .. "/.env.a")
+    assert.are.equal("🔐 .env.a", env.statusline())
+    assert.are.same({ label = ".env.a", file = root .. "/.env.a", count = 1, stale = false }, env.loaded())
+
+    vim.cmd("edit " .. root .. "/.env.a")
+    local buf = vim.api.nvim_get_current_buf()
+    local ns = vim.api.nvim_create_namespace("openbao_env")
+    local function mark()
+      local m = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })[1]
+      return m and m[4].virt_text[1][1]
+    end
+    assert.matches("^✔ loaded", mark())
+
+    vim.fn.writefile({ "LOAD_A=changed" }, root .. "/.env.a")
+    vim.uv.fs_utime(root .. "/.env.a", 1, 1)
+    assert.is_true(env.loaded().stale)
+    assert.are.equal("🔐 .env.a ⚠", env.statusline())
+    env.decorate(buf)
+    assert.matches("^⚠ changed", mark())
+
+    local seen
+    local original = vim.ui.select
+    vim.ui.select = function(items)
+      seen = items
+    end
+    vim.cmd("Bao env load")
+    vim.ui.select = original
+    assert.are.same({ "✔ .env.a", ".env.b" }, seen)
+
+    env.unload()
+    assert.are.equal("", env.statusline())
+    assert.is_nil(mark())
+    vim.cmd("bwipeout!")
   end)
 end)
